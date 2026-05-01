@@ -58,6 +58,12 @@ const renderedPages = new Set<number>()
 const ocrRunningPages = reactive(new Set<number>())
 // In-flight pdfjs RenderTask per page — allows cancellation when zoom changes rapidly
 const renderTasks = new Map<number, { cancel: () => void }>()
+// Pages currently visible (intersection observer). Used to limit re-renders.
+const visiblePages = new Set<number>()
+// The actual scale used for rendering. `pdfStore.zoom` controls visual size;
+// `renderZoom` is updated after zoom settles (debounced) to trigger expensive re-renders.
+const renderZoom = ref(pdfStore.zoom)
+let zoomDebounceTimer: number | null = null
 
 let pdfDoc: PDFJS.PDFDocumentProxy | null = null
 let intersectionObserver: IntersectionObserver | null = null
@@ -197,12 +203,15 @@ function setupIntersectionObserver() {
   intersectionObserver = new IntersectionObserver(
     (entries) => {
       for (const entry of entries) {
+        const n = parseInt((entry.target as HTMLElement).dataset.page ?? '0')
+        if (n <= 0) continue
         if (entry.isIntersecting) {
-          const n = parseInt((entry.target as HTMLElement).dataset.page ?? '0')
-          if (n > 0) {
-            renderPage(n)
-            if (pdfStore.viewMode !== 'normal') runOcrForPage(n)
-          }
+          visiblePages.add(n)
+          // Render visible page at current renderZoom (may be stale until debounce finishes)
+          renderPage(n)
+          if (pdfStore.viewMode !== 'normal') runOcrForPage(n)
+        } else {
+          visiblePages.delete(n)
         }
       }
     },
@@ -230,7 +239,7 @@ async function renderPage(n: number) {
 
   try {
     const page = await pdfDoc.getPage(n)
-    const scale = pdfStore.zoom * window.devicePixelRatio
+    const scale = renderZoom.value * window.devicePixelRatio
     const viewport = page.getViewport({ scale })
     canvas.width = viewport.width
     canvas.height = viewport.height
@@ -424,11 +433,42 @@ watch(() => pdfStore.fitWidthTick, () => {
 
 // Watch for zoom changes — cancel all stale in-flight renders first to prevent
 // corrupted canvases, then re-render visible pages at the new zoom level.
-watch(() => pdfStore.zoom, () => {
-  for (const [, task] of renderTasks) { try { task.cancel() } catch {} }
-  renderTasks.clear()
-  renderedPages.clear()
-  for (const [n] of pageRefs) renderPage(n)
+watch(() => pdfStore.zoom, (newZoom) => {
+  // Determine pages to re-render: visible pages plus a one-page buffer
+  const pagesToRender = new Set<number>()
+  for (const n of visiblePages) {
+    pagesToRender.add(n)
+    if (n > 1) pagesToRender.add(n - 1)
+    pagesToRender.add(n + 1)
+  }
+  pagesToRender.add(pdfStore.currentPage)
+
+  function cancelAndRender(pages: Set<number>) {
+    for (const n of pages) {
+      const t = renderTasks.get(n)
+      if (t) {
+        try { t.cancel() } catch {}
+        renderTasks.delete(n)
+      }
+      renderedPages.delete(n)
+    }
+    for (const n of pages) renderPage(n)
+  }
+
+  const diff = Math.abs(newZoom - renderZoom.value)
+  // Large jumps (e.g. 25%+) re-render immediately; small interactive changes are debounced.
+  if (diff >= 0.25) {
+    if (zoomDebounceTimer) { clearTimeout(zoomDebounceTimer); zoomDebounceTimer = null }
+    renderZoom.value = newZoom
+    cancelAndRender(pagesToRender)
+  } else {
+    if (zoomDebounceTimer) clearTimeout(zoomDebounceTimer)
+    zoomDebounceTimer = window.setTimeout(() => {
+      renderZoom.value = pdfStore.zoom
+      cancelAndRender(pagesToRender)
+      zoomDebounceTimer = null
+    }, 250)
+  }
 })
 
 // Watch for view mode changes

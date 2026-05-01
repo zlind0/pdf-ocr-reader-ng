@@ -31,6 +31,26 @@ const translationStore = useTranslationStore()
 
 const blocks = computed(() => ocrStore.getPageBlocks(props.pageNum))
 
+// Measurement helpers: small canvas + cache to keep checks fast.
+const _measureCanvas = typeof document !== 'undefined' ? document.createElement('canvas') : null
+const _measureCtx = _measureCanvas ? _measureCanvas.getContext('2d') : null
+const _measureCache = new Map<string, number>()
+const _fontFamily = "Helvetica, -apple-system, 'Noto Sans CJK SC', 'Source Han Sans', sans-serif"
+
+function measureTextWidth(text: string, fontPx: number) {
+  const key = `${props.pageNum}:${fontPx}:${text}`
+  const c = _measureCache.get(key)
+  if (c !== undefined) return c
+  let w = 0
+  if (_measureCtx) {
+    _measureCtx.font = `${fontPx}px ${_fontFamily}`
+    try { w = _measureCtx.measureText(text).width } catch { w = text.length * fontPx * 0.5 }
+  } else {
+    w = text.length * fontPx * 0.5
+  }
+  _measureCache.set(key, w)
+  return w
+}
 /**
  * Compute a stable "body text" font size for the page by taking the median of
  * the lower 75 % of block heights (sorted ascending). This excludes outliers
@@ -51,22 +71,36 @@ const pageBaseFontPx = computed<number>(() => {
   return Math.max(8, median * 0.75)
 })
 
-function blockStyle(block: { x: number; y: number; width: number; height: number }) {
+function blockStyle(block: { x: number; y: number; width: number; height: number; text?: string }) {
+  const cssPageW = props.canvasWidth / window.devicePixelRatio
   const cssPageH = props.canvasHeight / window.devicePixelRatio
-  const rawFontPx = block.height * cssPageH * 0.9
-  // Snap body text (anything smaller than 1.5× baseline) to the page baseline so
-  // all body copy renders at a consistent size. Genuine headings (>= 1.5× baseline)
-  // are left at their raw size to preserve the visual hierarchy.
-  const fontSize = rawFontPx < pageBaseFontPx.value * 1.5
-    ? pageBaseFontPx.value
-    : rawFontPx
+
+  const rawFontPx = block.height * cssPageH * 0.8
+  const baseFontPx = rawFontPx < pageBaseFontPx.value * 1.5 ? pageBaseFontPx.value : rawFontPx
+
+  // Determine longest visual line (split by newlines from OCR); measure it.
+  const text = displayText(block as any) || ''
+  const lines = text.split(/\r?\n/)
+  let longest = 0
+  for (const ln of lines) longest = Math.max(longest, measureTextWidth(ln, baseFontPx))
+
+  const availW = Math.max(8, block.width * cssPageW)
+
+  // If the longest measured line exceeds available width, reduce font size
+  // proportionally so it fits. Clamp to a readable minimum (8px).
+  let fontPx = baseFontPx
+  if (longest > availW) {
+    const scale = availW / longest
+    fontPx = Math.max(8, Math.floor(baseFontPx * scale))
+  }
+
   return {
     left: `${block.x * 100}%`,
     top: `${block.y * 100}%`,
     width: `${block.width * 100}%`,
     height: `${block.height * 100}%`,
-    fontSize: `${Math.max(8, fontSize)}px`,
-    lineHeight: `${block.height * cssPageH}px`
+    fontSize: `${Math.max(8, fontPx)}px`,
+    lineHeight: `${Math.max( Math.round(fontPx * 1.15), Math.round(block.height * cssPageH) )}px`
   }
 }
 
