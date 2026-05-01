@@ -56,6 +56,8 @@ const canvasHeights = reactive(new Map<number, number>())
 const pageDimensions = reactive(new Map<number, { width: number; height: number }>())
 const renderedPages = new Set<number>()
 const ocrRunningPages = reactive(new Set<number>())
+// In-flight pdfjs RenderTask per page — allows cancellation when zoom changes rapidly
+const renderTasks = new Map<number, { cancel: () => void }>()
 
 let pdfDoc: PDFJS.PDFDocumentProxy | null = null
 let intersectionObserver: IntersectionObserver | null = null
@@ -193,9 +195,18 @@ function setupIntersectionObserver() {
 }
 
 async function renderPage(n: number) {
-  if (renderedPages.has(n) || !pdfDoc) return
+  if (!pdfDoc) return
   const canvas = canvasRefs.get(n)
   if (!canvas) return
+
+  // Cancel any in-flight render for this page to prevent a stale viewport from
+  // corrupting the canvas when zoom changes rapidly.
+  const existing = renderTasks.get(n)
+  if (existing) {
+    try { existing.cancel() } catch {}
+    renderTasks.delete(n)
+  }
+  renderedPages.delete(n)
 
   try {
     const page = await pdfDoc.getPage(n)
@@ -210,10 +221,18 @@ async function renderPage(n: number) {
     canvasHeights.set(n, viewport.height)
 
     const ctx = canvas.getContext('2d')!
-    await page.render({ canvasContext: ctx, viewport }).promise
+    const task = page.render({ canvasContext: ctx, viewport })
+    renderTasks.set(n, task)
+    await task.promise
+    renderTasks.delete(n)
     renderedPages.add(n)
-  } catch (err) {
-    console.error(`Error rendering page ${n}:`, err)
+  } catch (err: unknown) {
+    renderTasks.delete(n)
+    const msg = err instanceof Error ? err.message : String(err)
+    // Ignore expected cancellation errors from rapid zoom changes
+    if (!msg.includes('cancelled') && !msg.includes('Rendering cancelled')) {
+      console.error(`Error rendering page ${n}:`, err)
+    }
   }
 }
 
@@ -324,6 +343,9 @@ function onWheel(e: WheelEvent) {
 }
 
 function onScroll() {
+  // Suppress scroll-based page tracking while a programmatic scrollIntoView is animating.
+  // Without this, onScroll fires during the animation and overwrites the navigation target.
+  if (Date.now() < programmaticScrollUntil) return
   if (!viewerEl.value || pdfStore.totalPages === 0) return
   // Find which page is most visible
   const scrollTop = viewerEl.value.scrollTop
@@ -349,16 +371,27 @@ function onScroll() {
   }
 }
 
-// Watch for page navigation (from sidebar/toolbar)
+// Watch for page navigation (from sidebar/toolbar).
+// Only trigger scrollIntoView when the target is not already in the viewport —
+// this naturally breaks the onScroll ↔ watcher feedback loop.
+let programmaticScrollUntil = 0
 watch(() => pdfStore.currentPage, (newPage) => {
   const el = pageRefs.get(newPage)
-  if (el && viewerEl.value) {
+  if (!el || !viewerEl.value) return
+  const rect = el.getBoundingClientRect()
+  const viewerRect = viewerEl.value.getBoundingClientRect()
+  const alreadyInView = rect.top >= viewerRect.top - 10 && rect.top <= viewerRect.bottom - 60
+  if (!alreadyInView) {
+    programmaticScrollUntil = Date.now() + 900
     el.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }
 })
 
-// Watch for zoom changes — re-render all rendered pages
+// Watch for zoom changes — cancel all stale in-flight renders first to prevent
+// corrupted canvases, then re-render visible pages at the new zoom level.
 watch(() => pdfStore.zoom, () => {
+  for (const [, task] of renderTasks) { try { task.cancel() } catch {} }
+  renderTasks.clear()
   renderedPages.clear()
   for (const [n] of pageRefs) renderPage(n)
 })
