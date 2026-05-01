@@ -60,6 +60,31 @@ const ocrRunningPages = reactive(new Set<number>())
 let pdfDoc: PDFJS.PDFDocumentProxy | null = null
 let intersectionObserver: IntersectionObserver | null = null
 
+// --- Scheduler helpers ---
+/** Yield control back to the browser so it can paint / handle input. */
+function yieldToMain(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0))
+}
+
+// OCR render semaphore: only 1 page renders for OCR at a time to avoid
+// saturating the CPU/GPU and blocking the main thread.
+let _ocrSemaphoreFree = true
+const _ocrWaiters: Array<() => void> = []
+
+function acquireOcrSlot(): Promise<void> {
+  if (_ocrSemaphoreFree) {
+    _ocrSemaphoreFree = false
+    return Promise.resolve()
+  }
+  return new Promise((resolve) => _ocrWaiters.push(resolve))
+}
+
+function releaseOcrSlot(): void {
+  const next = _ocrWaiters.shift()
+  if (next) next()
+  else _ocrSemaphoreFree = true
+}
+
 function setPageRef(n: number, el: HTMLElement | null) {
   if (el) {
     pageRefs.set(n, el)
@@ -101,11 +126,13 @@ async function loadDocument() {
       pdfStore.setOutline([])
     }
 
-    // Pre-load dimensions for all pages (fast)
+    // Pre-load dimensions for all pages, yielding every 10 pages so the
+    // browser stays responsive during initial load of large documents.
     for (let n = 1; n <= pdfDoc.numPages; n++) {
       const page = await pdfDoc.getPage(n)
       const vp = page.getViewport({ scale: 1 })
       pageDimensions.set(n, { width: vp.width, height: vp.height })
+      if (n % 10 === 0) await yieldToMain()
     }
 
     setupIntersectionObserver()
@@ -205,19 +232,28 @@ async function runOcrForPage(n: number) {
   ocrRunningPages.add(n)
   ocrStore.isRunning = true
 
+  // Acquire semaphore so only one page renders at a time.
+  // This prevents multiple large OffscreenCanvas encodes from piling up
+  // and lets the browser handle scroll/input between renders.
+  await acquireOcrSlot()
   try {
-    // Render page at high scale for OCR
+    // Render page at high scale for OCR using OffscreenCanvas.
+    // OffscreenCanvas.convertToBlob() is async and does NOT block the main
+    // thread, unlike HTMLCanvasElement.toDataURL() which is synchronous and
+    // can stall the UI for hundreds of milliseconds on large pages.
     const page = await pdfDoc.getPage(n)
     const scale = settingsStore.settings.ocr.renderScale
     const viewport = page.getViewport({ scale })
-    const offscreenCanvas = document.createElement('canvas')
-    offscreenCanvas.width = viewport.width
-    offscreenCanvas.height = viewport.height
-    const ctx = offscreenCanvas.getContext('2d')!
+    const offscreen = new OffscreenCanvas(viewport.width, viewport.height)
+    const ctx = offscreen.getContext('2d')!
     await page.render({ canvasContext: ctx, viewport }).promise
 
-    const imageDataUrl = offscreenCanvas.toDataURL('image/png')
-    const result = await window.electron.runOcr(imageDataUrl)
+    // Async PNG encoding — yields to the browser between render and encode
+    await yieldToMain()
+    const blob = await offscreen.convertToBlob({ type: 'image/png' })
+    const arrayBuffer = await blob.arrayBuffer()
+    // Send raw binary via IPC (no base64 overhead)
+    const result = await window.electron.runOcr(new Uint8Array(arrayBuffer))
 
     if (result.error) {
       ocrStore.error = result.error
@@ -231,6 +267,7 @@ async function runOcrForPage(n: number) {
     const message = err instanceof Error ? err.message : String(err)
     ocrStore.error = message
   } finally {
+    releaseOcrSlot()
     ocrRunningPages.delete(n)
     ocrStore.isRunning = ocrRunningPages.size > 0
   }

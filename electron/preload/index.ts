@@ -8,8 +8,8 @@ const api = {
   getUserDataPath: (): Promise<string> => ipcRenderer.invoke('file:get-user-data-path'),
 
   // OCR
-  runOcr: (imageDataUrl: string): Promise<{ blocks?: OcrBlock[]; error?: string }> =>
-    ipcRenderer.invoke('ocr:run', imageDataUrl),
+  runOcr: (imageData: Uint8Array): Promise<{ blocks?: OcrBlock[]; error?: string }> =>
+    ipcRenderer.invoke('ocr:run', imageData),
 
   // Translation
   translate: (

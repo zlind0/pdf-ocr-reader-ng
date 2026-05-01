@@ -8,7 +8,7 @@ declare global {
       readFile(filePath: string): Promise<Buffer>
       hashFile(filePath: string): Promise<string>
       getUserDataPath(): Promise<string>
-      runOcr(imageDataUrl: string): Promise<{ blocks?: OcrBlock[]; error?: string }>
+      runOcr(imageData: Uint8Array): Promise<{ blocks?: OcrBlock[]; error?: string }>
       translate(
         blocks: { id: number; text: string }[],
         targetLang: string,

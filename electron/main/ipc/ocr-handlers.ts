@@ -1,12 +1,14 @@
 import type { IpcMain } from 'electron'
 import { execFile, execFileSync } from 'child_process'
-import { writeFileSync, existsSync, mkdirSync, chmodSync } from 'fs'
+import { writeFile, writeFileSync, readFileSync, existsSync, mkdirSync, chmodSync } from 'fs'
 import { join } from 'path'
 import { app } from 'electron'
 import { promisify } from 'util'
 import { tmpdir } from 'os'
+import { createHash } from 'crypto'
 
 const execFileAsync = promisify(execFile)
+const writeFileAsync = promisify(writeFile)
 
 const OCR_SWIFT_SOURCE = `
 import Foundation
@@ -67,40 +69,97 @@ print(String(data: data, encoding: .utf8)!)
 
 let ocrBinaryPath: string | null = null
 
-function ensureOcrBinary(): string {
-  if (ocrBinaryPath && existsSync(ocrBinaryPath)) return ocrBinaryPath
-
+function getOcrPaths() {
   const cacheDir = join(app.getPath('userData'), 'bin')
+  return {
+    cacheDir,
+    swiftSource: join(cacheDir, 'ocr.swift'),
+    binary: join(cacheDir, 'ocr-engine'),
+    hashFile: join(cacheDir, 'ocr.hash')
+  }
+}
+
+/** A short hash of the embedded Swift source, used to detect source changes. */
+function currentSourceHash(): string {
+  return createHash('md5').update(OCR_SWIFT_SOURCE).digest('hex')
+}
+
+/**
+ * Synchronous fast-path used inside the IPC handler.
+ * By the time an OCR request arrives, warmUpOcrBinary() should already
+ * have run, so this is almost always just a single null-check + return.
+ */
+function ensureOcrBinary(): string {
+  // Fast path: resolved this session (ocrBinaryPath is set)
+  if (ocrBinaryPath) return ocrBinaryPath
+
+  const { cacheDir, swiftSource, binary, hashFile } = getOcrPaths()
   if (!existsSync(cacheDir)) mkdirSync(cacheDir, { recursive: true })
 
-  const swiftSource = join(cacheDir, 'ocr.swift')
-  const binary = join(cacheDir, 'ocr-engine')
+  // If binary exists on disk AND source hash matches, reuse it
+  if (existsSync(binary)) {
+    const stored = existsSync(hashFile) ? readFileSync(hashFile, 'utf8').trim() : ''
+    if (stored === currentSourceHash()) {
+      ocrBinaryPath = binary
+      return binary
+    }
+  }
 
-  // Write source if not exists or outdated
+  // Fallback: compile synchronously (only if warmUpOcrBinary wasn't awaited)
   writeFileSync(swiftSource, OCR_SWIFT_SOURCE, 'utf8')
-
-  // Compile
   execFileSync('swiftc', [
-    '-O',
-    '-o', binary,
-    swiftSource,
-    '-framework', 'Vision',
-    '-framework', 'AppKit'
+    '-O', '-o', binary, swiftSource,
+    '-framework', 'Vision', '-framework', 'AppKit'
   ], { timeout: 60000 })
-
   chmodSync(binary, 0o755)
+  writeFileSync(hashFile, currentSourceHash(), 'utf8')
+  ocrBinaryPath = binary
   return binary
 }
 
-export function registerOcrHandlers(ipcMain: IpcMain): void {
-  ipcMain.handle('ocr:run', async (_event, imageDataUrl: string) => {
-    try {
-      // Save image data to a temp file
-      const tmpDir = tmpdir()
-      const tmpImg = join(tmpDir, `ocr_input_${Date.now()}.png`)
+/**
+ * Called once at app startup.
+ * Compiles (or validates) the OCR binary **asynchronously** so the main
+ * process is never blocked and the first OCR request is instant.
+ */
+export async function warmUpOcrBinary(): Promise<void> {
+  const { cacheDir, swiftSource, binary, hashFile } = getOcrPaths()
+  if (!existsSync(cacheDir)) mkdirSync(cacheDir, { recursive: true })
 
-      const base64Data = imageDataUrl.replace(/^data:image\/\w+;base64,/, '')
-      writeFileSync(tmpImg, Buffer.from(base64Data, 'base64'))
+  const hash = currentSourceHash()
+
+  // Binary exists and source unchanged → just cache the path, nothing to do
+  if (existsSync(binary)) {
+    const stored = existsSync(hashFile) ? readFileSync(hashFile, 'utf8').trim() : ''
+    if (stored === hash) {
+      ocrBinaryPath = binary
+      return
+    }
+  }
+
+  // Compile asynchronously — does NOT block the main process
+  console.log('[OCR] Compiling OCR binary...')
+  writeFileSync(swiftSource, OCR_SWIFT_SOURCE, 'utf8')
+  try {
+    await execFileAsync('swiftc', [
+      '-O', '-o', binary, swiftSource,
+      '-framework', 'Vision', '-framework', 'AppKit'
+    ], { timeout: 60000 })
+    chmodSync(binary, 0o755)
+    writeFileSync(hashFile, hash, 'utf8')
+    ocrBinaryPath = binary
+    console.log('[OCR] Binary ready.')
+  } catch (err) {
+    console.error('[OCR] Failed to compile binary:', err)
+  }
+}
+
+export function registerOcrHandlers(ipcMain: IpcMain): void {
+  ipcMain.handle('ocr:run', async (_event, imageData: Buffer) => {
+    try {
+      const tmpImg = join(tmpdir(), `ocr_input_${Date.now()}.png`)
+      // Async write: does not block the main process event loop
+      await writeFileAsync(tmpImg, Buffer.from(imageData))
 
       const binary = ensureOcrBinary()
       const { stdout } = await execFileAsync(binary, [tmpImg], { timeout: 30000 })

@@ -92,10 +92,8 @@ const translationStore = useTranslationStore()
 async function openFile() {
   const path = await window.electron.openFileDialog()
   if (!path) return
-  const { useOcrStore: useOcr } = await import('../stores/ocr')
-  const { useTranslationStore: useTrans } = await import('../stores/translation')
-  useOcr().clearAll()
-  useTrans().clearAll()
+  ocrStore.clearAll()
+  translationStore.clearAll()
   const name = path.split('/').pop() ?? path
   const hash = await window.electron.hashFile(path)
   pdfStore.setFile(path, name, hash)

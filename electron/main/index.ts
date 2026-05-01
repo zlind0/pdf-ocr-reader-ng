@@ -2,7 +2,7 @@ import { app, shell, BrowserWindow, ipcMain, dialog } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { registerFileHandlers } from './ipc/file-handlers'
-import { registerOcrHandlers } from './ipc/ocr-handlers'
+import { registerOcrHandlers, warmUpOcrBinary } from './ipc/ocr-handlers'
 import { registerTranslationHandlers } from './ipc/translation-handlers'
 import { registerSettingsHandlers } from './ipc/settings-handlers'
 import { registerCacheHandlers } from './ipc/cache-handlers'
@@ -53,6 +53,10 @@ app.whenReady().then(() => {
   registerTranslationHandlers(ipcMain)
   registerSettingsHandlers(ipcMain)
   registerCacheHandlers(ipcMain)
+
+  // Pre-compile the OCR binary asynchronously so it's ready before the user
+  // triggers OCR. This runs in the background and never blocks the UI.
+  warmUpOcrBinary().catch(console.error)
 
   createWindow()
 
