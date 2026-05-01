@@ -1,0 +1,81 @@
+# Node
+node_modules/
+.pnpm-store/
+.pnpm-debug.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Build outputs
+dist/
+out/
+build/
+release/
+dist-electron/
+dist-mac/
+dist-linux/
+dist-win/
+*.dmg
+*.AppImage
+*.exe
+*.msi
+
+# Electron
+Electron.app/
+**/Electron.app/
+*.app/Contents/MacOS/Electron
+
+# Vite / dev caches
+.vite/
+.cache/
+.esbuild/
+
+# TypeScript
+*.tsbuildinfo
+lib/
+lib-cov/
+
+# Logs and runtime files
+logs/
+*.log
+*.pid
+*.seed
+*.lock
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editors
+.idea/
+.vscode/
+*.sublime-project
+*.sublime-workspace
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Coverage
+coverage/
+.nyc_output/
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.swp
+
+# Tests / reports
+playwright-report/
+jest/
+
+# Package archives
+*.tgz
+
+# Local overrides
+*.local
+
+*.pdf

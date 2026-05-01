@@ -1,0 +1,9 @@
+{
+  "files": ["electron.vite.config.*", "electron/**/*", "src/**/*"],
+  "extends": "@electron-toolkit/tsconfig/tsconfig.json",
+  "include": ["electron.vite.config.*", "electron/**/*", "src/**/*"],
+  "references": [
+    { "path": "./tsconfig.node.json" },
+    { "path": "./tsconfig.web.json" }
+  ]
+}

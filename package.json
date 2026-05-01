@@ -1,0 +1,40 @@
+{
+  "name": "pdf-ocr-reader",
+  "version": "0.1.0",
+  "description": "PDF reader with OCR and translation for scanned documents",
+  "main": "./out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "preview": "electron-vite preview",
+    "build:mac": "electron-builder --mac",
+    "typecheck": "vue-tsc --noEmit && tsc --noEmit -p tsconfig.node.json"
+  },
+  "dependencies": {
+    "pdfjs-dist": "^4.4.168",
+    "pinia": "^2.1.7",
+    "vue": "^3.4.0"
+  },
+  "devDependencies": {
+    "@electron-toolkit/preload": "^3.0.0",
+    "@electron-toolkit/tsconfig": "^2.0.0",
+    "@electron-toolkit/utils": "^3.0.0",
+    "@types/node": "^20.11.5",
+    "@vitejs/plugin-vue": "^5.0.3",
+    "electron": "^33.0.0",
+    "electron-builder": "^24.9.1",
+    "electron-vite": "^2.3.0",
+    "typescript": "^5.3.3",
+    "vite": "^5.0.12",
+    "vue-tsc": "^2.0.0"
+  },
+  "build": {
+    "appId": "com.pdfocr.reader",
+    "productName": "PDF OCR Reader",
+    "mac": {
+      "target": "dmg",
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist"
+    }
+  }
+}
