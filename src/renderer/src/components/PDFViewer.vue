@@ -415,6 +415,13 @@ watch(() => pdfStore.currentPage, (newPage) => {
   }
 })
 
+// Fit page width to 80% of the viewer container when requested from toolbar
+watch(() => pdfStore.fitWidthTick, () => {
+  const page = pageDimensions.get(pdfStore.currentPage) ?? pageDimensions.get(1)
+  if (!page || !viewerEl.value) return
+  pdfStore.setZoom((viewerEl.value.clientWidth * 0.8) / page.width)
+})
+
 // Watch for zoom changes — cancel all stale in-flight renders first to prevent
 // corrupted canvases, then re-render visible pages at the new zoom level.
 watch(() => pdfStore.zoom, () => {

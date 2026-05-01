@@ -32,9 +32,22 @@
       <div class="divider" />
 
       <button class="tb-btn" @click="pdfStore.setZoom(pdfStore.zoom - 0.1)">−</button>
-      <span class="zoom-label">{{ Math.round(pdfStore.zoom * 100) }}%</span>
+      <div class="zoom-wrap" ref="zoomWrapRef">
+        <button class="zoom-label-btn" @click="showZoomMenu = !showZoomMenu">
+          {{ Math.round(pdfStore.zoom * 100) }}%
+        </button>
+        <div v-if="showZoomMenu" class="zoom-menu">
+          <button
+            v-for="pct in [100, 120, 150, 200, 250]"
+            :key="pct"
+            class="zoom-menu-item"
+            :class="{ active: Math.round(pdfStore.zoom * 100) === pct }"
+            @click="selectZoom(pct)"
+          >{{ pct }}%</button>
+        </div>
+      </div>
       <button class="tb-btn" @click="pdfStore.setZoom(pdfStore.zoom + 0.1)">+</button>
-      <button class="tb-btn zoom-fit" title="适合页面" @click="pdfStore.setZoom(1.0)">适</button>
+      <button class="tb-btn zoom-fit" title="适合页面宽度" @click="pdfStore.requestFitWidth()">适</button>
     </div>
     <div class="drag-fill" />
 
@@ -77,7 +90,7 @@
 </template>
 
 <script setup lang="ts">
-import { defineComponent, h } from 'vue'
+import { defineComponent, h, ref, onMounted, onUnmounted } from 'vue'
 import { usePdfStore } from '../stores/pdf'
 import { useOcrStore } from '../stores/ocr'
 import { useTranslationStore } from '../stores/translation'
@@ -116,6 +129,24 @@ function toggleTranslation() {
   if (pdfStore.viewMode === 'translation') pdfStore.setViewMode('normal')
   else pdfStore.setViewMode('translation')
 }
+
+// Zoom dropdown
+const showZoomMenu = ref(false)
+const zoomWrapRef = ref<HTMLElement | null>(null)
+
+function selectZoom(pct: number) {
+  pdfStore.setZoom(pct / 100)
+  showZoomMenu.value = false
+}
+
+function onDocMouseDown(e: MouseEvent) {
+  if (showZoomMenu.value && zoomWrapRef.value && !zoomWrapRef.value.contains(e.target as Node)) {
+    showZoomMenu.value = false
+  }
+}
+
+onMounted(() => document.addEventListener('mousedown', onDocMouseDown))
+onUnmounted(() => document.removeEventListener('mousedown', onDocMouseDown))
 
 // Icon components — defined in setup scope so the template can use them directly
 const IconMenu = defineComponent({
@@ -215,6 +246,59 @@ const IconSettings = defineComponent({
   width: 44px;
   text-align: center;
   color: var(--color-text);
+}
+
+.zoom-wrap {
+  position: relative;
+}
+
+.zoom-label-btn {
+  font-size: 13px;
+  width: 52px;
+  text-align: center;
+  color: var(--color-text);
+  background: transparent;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  padding: 3px 4px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.zoom-label-btn:hover {
+  background: var(--color-surface-2);
+}
+
+.zoom-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  box-shadow: 0 4px 16px rgba(0,0,0,0.3);
+  z-index: 1000;
+  min-width: 72px;
+  overflow: hidden;
+}
+
+.zoom-menu-item {
+  display: block;
+  width: 100%;
+  padding: 6px 16px;
+  font-size: 13px;
+  text-align: center;
+  background: transparent;
+  color: var(--color-text);
+  cursor: pointer;
+  transition: background 0.12s;
+}
+.zoom-menu-item:hover {
+  background: var(--color-surface-2);
+}
+.zoom-menu-item.active {
+  color: var(--color-accent);
+  font-weight: 600;
 }
 
 .divider {

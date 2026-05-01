@@ -15,6 +15,8 @@ export const usePdfStore = defineStore('pdf', () => {
   const loadError = ref<string | null>(null)
   // Reading progress persisted per file
   const progressMap = ref<Record<string, number>>({})
+  // Incremented each time the user requests a fit-to-width zoom
+  const fitWidthTick = ref(0)
 
   const isFileOpen = computed(() => filePath.value !== null)
   const progress = computed(() => {
@@ -59,6 +61,10 @@ export const usePdfStore = defineStore('pdf', () => {
     outline.value = items
   }
 
+  function requestFitWidth() {
+    fitWidthTick.value++
+  }
+
   function loadProgress() {
     try {
       const raw = localStorage.getItem('pdfProgress')
@@ -68,7 +74,7 @@ export const usePdfStore = defineStore('pdf', () => {
 
   return {
     filePath, fileName, pdfHash, totalPages, currentPage, zoom,
-    viewMode, outline, isLoading, loadError, isFileOpen, progress,
-    setFile, setTotalPages, goToPage, setZoom, setViewMode, setOutline, loadProgress
+    viewMode, outline, isLoading, loadError, isFileOpen, progress, fitWidthTick,
+    setFile, setTotalPages, goToPage, setZoom, setViewMode, setOutline, loadProgress, requestFitWidth
   }
 })
