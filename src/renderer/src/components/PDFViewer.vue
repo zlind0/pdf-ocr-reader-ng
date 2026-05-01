@@ -68,22 +68,42 @@ function yieldToMain(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0))
 }
 
-// OCR render semaphore: only 1 page renders for OCR at a time to avoid
-// saturating the CPU/GPU and blocking the main thread.
-let _ocrSemaphoreFree = true
-const _ocrWaiters: Array<() => void> = []
+// OCR scheduler: only 1 page executes OCR at a time (semaphore), with a
+// LIFO queue capped at MAX_OCR_QUEUE. LIFO ensures the page the user is
+// currently reading is served first; the cap prevents scroll animations from
+// filling an unbounded queue with stale pages.
+const MAX_OCR_QUEUE = 5
+const OCR_CANCELLED = Symbol('ocrCancelled')
 
-function acquireOcrSlot(): Promise<void> {
+interface OcrWaiter {
+  pageNum: number
+  resolve: () => void
+  reject: (reason: unknown) => void
+}
+
+let _ocrSemaphoreFree = true
+const _ocrWaiters: OcrWaiter[] = []
+
+function acquireOcrSlot(pageNum: number): Promise<void> {
   if (_ocrSemaphoreFree) {
     _ocrSemaphoreFree = false
     return Promise.resolve()
   }
-  return new Promise((resolve) => _ocrWaiters.push(resolve))
+  // Drop the oldest (front) waiter if the queue is at capacity.
+  if (_ocrWaiters.length >= MAX_OCR_QUEUE) {
+    const dropped = _ocrWaiters.shift()!
+    ocrRunningPages.delete(dropped.pageNum)
+    dropped.reject(OCR_CANCELLED)
+  }
+  return new Promise<void>((resolve, reject) => {
+    _ocrWaiters.push({ pageNum, resolve, reject })
+  })
 }
 
 function releaseOcrSlot(): void {
-  const next = _ocrWaiters.shift()
-  if (next) next()
+  // LIFO: pop from the back so the most-recently-enqueued page runs next.
+  const next = _ocrWaiters.pop()
+  if (next) next.resolve()
   else _ocrSemaphoreFree = true
 }
 
@@ -251,10 +271,18 @@ async function runOcrForPage(n: number) {
   ocrRunningPages.add(n)
   ocrStore.isRunning = true
 
-  // Acquire semaphore so only one page renders at a time.
-  // This prevents multiple large OffscreenCanvas encodes from piling up
-  // and lets the browser handle scroll/input between renders.
-  await acquireOcrSlot()
+  // Acquire semaphore slot. The queue is LIFO and bounded (MAX_OCR_QUEUE);
+  // if this page gets dropped because newer pages pushed it out, bail early.
+  try {
+    await acquireOcrSlot(n)
+  } catch (reason) {
+    if (reason === OCR_CANCELLED) {
+      // Already removed from ocrRunningPages by acquireOcrSlot's drop logic.
+      ocrStore.isRunning = ocrRunningPages.size > 0
+      return
+    }
+    throw reason
+  }
   try {
     // Render page at high scale for OCR using OffscreenCanvas.
     // OffscreenCanvas.convertToBlob() is async and does NOT block the main
